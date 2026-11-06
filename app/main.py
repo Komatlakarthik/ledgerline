@@ -1,7 +1,9 @@
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
+import psycopg
 from .auth import router as auth_router
 from .deps import current_user, require_roles
+from .config import DATABASE_URL
 
 app = FastAPI(title="LedgerLine")
 
@@ -15,9 +17,20 @@ app.add_middleware(
 
 app.include_router(auth_router)
 
+@app.get("/")
+def root():
+    return {"message": "LedgerLine API is running. See /docs for API documentation and /health for system status."}
+
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                return {"status": "ok", "db": "connected"}
+    except Exception as e:
+        redacted = DATABASE_URL.split("@")[-1] if "@" in DATABASE_URL else DATABASE_URL[:15]
+        return {"status": "degraded", "db_error": str(e), "target": redacted}
 
 @app.get("/me")
 def me(user=Depends(current_user)):
