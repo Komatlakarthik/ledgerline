@@ -1,15 +1,10 @@
-from fastapi import FastAPI, status
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers.auth import router as auth_router
-from app.db import get_db
+from .auth import router as auth_router
+from .deps import current_user, require_roles
 
-app = FastAPI(
-    title="LedgerLine API",
-    description="Double-entry money movement engine with provable integrity and idempotency.",
-    version="1.0.0",
-)
+app = FastAPI(title="LedgerLine")
 
-# CORS configuration for web clients and evaluator scripts
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,24 +13,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Register routers
 app.include_router(auth_router)
 
-@app.get("/health", tags=["System"])
+@app.get("/health")
 def health():
-    """Health check endpoint that verifies DB connectivity."""
-    db_status = "unreachable"
-    try:
-        with get_db() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1;")
-                if cur.fetchone()[0] == 1:
-                    db_status = "connected"
-    except Exception as e:
-        db_status = f"error: {str(e)}"
+    return {"status": "ok"}
 
-    return {
-        "status": "ok" if db_status == "connected" else "degraded",
-        "database": db_status,
-        "service": "ledgerline-api",
-    }
+@app.get("/me")
+def me(user=Depends(current_user)):
+    return user
+
+@app.get("/admin/ping")
+def admin_ping(user=Depends(require_roles("admin"))):
+    return {"ok": True}

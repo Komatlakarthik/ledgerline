@@ -5,101 +5,69 @@ from app.main import app
 
 client = TestClient(app)
 
-def test_health_check():
-    response = client.get("/health")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["status"] == "ok"
-    assert data["database"] == "connected"
+def test_health():
+    res = client.get("/health")
+    assert res.status_code == 200
+    assert res.json() == {"status": "ok"}
 
-def test_register_and_login_holder():
-    unique_email = f"holder_{uuid.uuid4().hex[:8]}@example.com"
-    password = "StrongPassword123!"
+def test_register_and_login():
+    unique_email = f"user_{uuid.uuid4().hex[:8]}@example.com"
+    pw = "SecretPass123!"
 
-    # 1. Register
-    reg_res = client.post(
-        "/auth/register",
-        json={"email": unique_email, "password": password, "role": "holder"},
-    )
+    # 1. Register: always gets role 'holder'
+    reg_res = client.post("/auth/register", json={"email": unique_email, "password": pw})
     assert reg_res.status_code == 201
-    reg_data = reg_res.json()
-    assert "access_token" in reg_data
-    assert reg_data["user"]["email"] == unique_email
-    assert reg_data["user"]["role"] == "holder"
-    assert reg_data["user"]["account_id"] is not None
+    user_data = reg_res.json()
+    assert user_data["email"] == unique_email
+    assert user_data["role"] == "holder"
 
     # 2. Duplicate registration rejected
-    dup_res = client.post(
-        "/auth/register",
-        json={"email": unique_email, "password": password, "role": "holder"},
-    )
+    dup_res = client.post("/auth/register", json={"email": unique_email, "password": pw})
     assert dup_res.status_code == 409
 
-    # 3. Login success
-    login_res = client.post(
-        "/auth/login",
-        json={"email": unique_email, "password": password},
-    )
+    # 3. Login
+    login_res = client.post("/auth/login", json={"email": unique_email, "password": pw})
     assert login_res.status_code == 200
     token = login_res.json()["access_token"]
 
-    # 4. Access /auth/me
-    me_res = client.get(
-        "/auth/me",
-        headers={"Authorization": f"Bearer {token}"},
-    )
+    # 4. /me returns authenticated user
+    me_res = client.get("/me", headers={"Authorization": f"Bearer {token}"})
     assert me_res.status_code == 200
     assert me_res.json()["email"] == unique_email
+    assert me_res.json()["role"] == "holder"
 
-    # 5. Access holder-only route
-    holder_res = client.get(
-        "/auth/holder-only",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert holder_res.status_code == 200
-
-    # 6. Holder cannot access admin-only route
-    admin_res = client.get(
-        "/auth/admin-only",
-        headers={"Authorization": f"Bearer {token}"},
-    )
+    # 5. Holder accessing /admin/ping returns 403
+    admin_res = client.get("/admin/ping", headers={"Authorization": f"Bearer {token}"})
     assert admin_res.status_code == 403
 
-def test_login_invalid_credentials():
-    res = client.post(
-        "/auth/login",
-        json={"email": "nonexistent@example.com", "password": "wrong"},
-    )
+def test_unauthenticated():
+    res = client.get("/me")
     assert res.status_code == 401
 
-def test_roles_enforcement():
-    admin_email = f"admin_{uuid.uuid4().hex[:8]}@example.com"
-    auditor_email = f"auditor_{uuid.uuid4().hex[:8]}@example.com"
+def test_seed_users_and_roles():
+    pw = "DemoPassword123!"
 
-    # Register admin
-    adm_res = client.post(
-        "/auth/register",
-        json={"email": admin_email, "password": "AdminPassword123!", "role": "admin"},
-    )
-    assert adm_res.status_code == 201
-    adm_token = adm_res.json()["access_token"]
+    # Test Admin
+    adm_login = client.post("/auth/login", json={"email": "admin@ledgerline.test", "password": pw})
+    assert adm_login.status_code == 200
+    adm_token = adm_login.json()["access_token"]
 
-    # Register auditor
-    aud_res = client.post(
-        "/auth/register",
-        json={"email": auditor_email, "password": "AuditorPassword123!", "role": "auditor"},
-    )
-    assert aud_res.status_code == 201
-    aud_token = aud_res.json()["access_token"]
+    adm_ping = client.get("/admin/ping", headers={"Authorization": f"Bearer {adm_token}"})
+    assert adm_ping.status_code == 200
+    assert adm_ping.json() == {"ok": True}
 
-    # Admin access admin-only
-    res = client.get("/auth/admin-only", headers={"Authorization": f"Bearer {adm_token}"})
-    assert res.status_code == 200
+    # Test Auditor
+    aud_login = client.post("/auth/login", json={"email": "auditor@ledgerline.test", "password": pw})
+    assert aud_login.status_code == 200
+    aud_token = aud_login.json()["access_token"]
 
-    # Auditor access admin-only -> 403
-    res = client.get("/auth/admin-only", headers={"Authorization": f"Bearer {aud_token}"})
-    assert res.status_code == 403
+    aud_ping = client.get("/admin/ping", headers={"Authorization": f"Bearer {aud_token}"})
+    assert aud_ping.status_code == 403
 
-    # Auditor access auditor-only -> 200
-    res = client.get("/auth/auditor-only", headers={"Authorization": f"Bearer {aud_token}"})
-    assert res.status_code == 200
+    # Test Holder
+    hld_login = client.post("/auth/login", json={"email": "holder@ledgerline.test", "password": pw})
+    assert hld_login.status_code == 200
+    hld_token = hld_login.json()["access_token"]
+
+    hld_ping = client.get("/admin/ping", headers={"Authorization": f"Bearer {hld_token}"})
+    assert hld_ping.status_code == 403

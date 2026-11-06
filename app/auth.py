@@ -1,92 +1,34 @@
-from datetime import datetime, timezone, timedelta
-from typing import Dict, Any, List
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError
-import jwt
-from psycopg.rows import dict_row
+import psycopg
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
+from .db import get_conn
+from .security import hash_password, verify_password, make_token
 
-from app.config import JWT_SECRET, JWT_ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
-from app.db import get_db
+router = APIRouter(prefix="/auth", tags=["auth"])
 
-ph = PasswordHasher()
-security = HTTPBearer(auto_error=True)
+class Credentials(BaseModel):
+    email: str = Field(pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$", max_length=254)
+    password: str = Field(min_length=8, max_length=128)
 
-def hash_password(password: str) -> str:
-    """Hashes a password using Argon2id."""
-    return ph.hash(password)
-
-def verify_password(hashed_password: str, plain_password: str) -> bool:
-    """Verifies a plain password against an Argon2id hash."""
+@router.post("/register", status_code=201)
+def register(body: Credentials, conn=Depends(get_conn)):
     try:
-        return ph.verify(hashed_password, plain_password)
-    except VerifyMismatchError:
-        return False
+        row = conn.execute(
+            "INSERT INTO users (email, password_hash, role) "
+            "VALUES (%s, %s, 'holder') RETURNING id, email, role",
+            (body.email.lower(), hash_password(body.password))).fetchone()
+        conn.execute(
+            "INSERT INTO accounts (owner_id, name, is_system, balance_paise) "
+            "VALUES (%s, %s, false, 0)",
+            (row["id"], f"{body.email.lower().split('@')[0]}'s Primary Account"))
+    except psycopg.errors.UniqueViolation:
+        raise HTTPException(409, "Email already registered")
+    return row
 
-def create_access_token(user_id: int, email: str, role: str) -> str:
-    """Creates a signed JWT access token."""
-    now = datetime.now(timezone.utc)
-    payload = {
-        "sub": str(user_id),
-        "user_id": user_id,
-        "email": email,
-        "role": role,
-        "iat": now,
-        "exp": now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
-    }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
-
-def decode_access_token(token: str) -> Dict[str, Any]:
-    """Decodes and validates a JWT access token."""
-    try:
-        return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token has expired",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    except jwt.InvalidTokenError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid authentication token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-) -> Dict[str, Any]:
-    """Dependency that extracts, verifies the JWT, and fetches the user from PostgreSQL."""
-    payload = decode_access_token(credentials.credentials)
-    user_id = payload.get("user_id")
-    if not user_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token claims",
-        )
-
-    with get_db() as conn:
-        with conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(
-                "SELECT id, email, role, created_at FROM users WHERE id = %s;",
-                (user_id,),
-            )
-            user = cur.fetchone()
-            if not user:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="User not found",
-                )
-            return user
-
-def require_role(*allowed_roles: str):
-    """Dependency factory ensuring the authenticated user has one of the allowed roles."""
-    def role_dependency(current_user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
-        if current_user["role"] not in allowed_roles:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access forbidden: requires one of {allowed_roles}",
-            )
-        return current_user
-    return role_dependency
+@router.post("/login")
+def login(body: Credentials, conn=Depends(get_conn)):
+    u = conn.execute("SELECT id, password_hash FROM users WHERE email = %s",
+                     (body.email.lower(),)).fetchone()
+    if not u or not verify_password(u["password_hash"], body.password):
+        raise HTTPException(401, "Invalid credentials")
+    return {"access_token": make_token(u["id"]), "token_type": "bearer"}
