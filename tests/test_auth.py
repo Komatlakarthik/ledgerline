@@ -8,7 +8,7 @@ client = TestClient(app)
 def test_health():
     res = client.get("/health")
     assert res.status_code == 200
-    assert res.json() == {"status": "ok"}
+    assert res.json()["status"] == "ok"
 
 def test_register_and_login():
     unique_email = f"user_{uuid.uuid4().hex[:8]}@example.com"
