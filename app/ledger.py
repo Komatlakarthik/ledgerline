@@ -8,10 +8,10 @@ def _hash(kind, from_id, to_id, amount):
 
 
 def _save(conn, user_id, key, status, body):
-    conn.execute(
-        "UPDATE idempotency_keys SET status_code=%s, response=%s WHERE user_id=%s AND key=%s",
-        (status, Jsonb(body), user_id, key))
-    return status, body
+    row = conn.execute(
+        "UPDATE idempotency_keys SET status_code=%s, response=%s WHERE user_id=%s AND key=%s RETURNING response",
+        (status, Jsonb(body), user_id, key)).fetchone()
+    return status, row["response"] if row else body
 
 
 def execute(conn, user_id, key, kind, from_id, to_id, amount):
