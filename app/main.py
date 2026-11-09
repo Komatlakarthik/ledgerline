@@ -4,6 +4,7 @@ import psycopg
 from .auth import router as auth_router
 from .accounts import router as accounts_router
 from .money import router as money_router
+from .reports import router as reports_router
 from .deps import current_user, require_roles
 from .config import DATABASE_URL
 
@@ -20,6 +21,7 @@ app.add_middleware(
 app.include_router(auth_router)
 app.include_router(accounts_router)
 app.include_router(money_router)
+app.include_router(reports_router)
 
 @app.get("/")
 def root():
