@@ -1,6 +1,7 @@
 import hashlib, json
 from fastapi import HTTPException
 from psycopg.types.json import Jsonb
+from . import audit
 
 
 def _hash(kind, from_id, to_id, amount):
@@ -12,6 +13,12 @@ def _save(conn, user_id, key, status, body):
         "UPDATE idempotency_keys SET status_code=%s, response=%s WHERE user_id=%s AND key=%s RETURNING response",
         (status, Jsonb(body), user_id, key)).fetchone()
     return status, row["response"] if row else body
+
+
+def _deny(user_id, kind, key, from_id, to_id, amount):
+    audit.log(user_id, f"denied_{kind}", {"from": from_id, "to": to_id,
+              "amount_paise": amount, "idempotency_key": key})
+    raise HTTPException(404, "Account not found")
 
 
 def execute(conn, user_id, key, kind, from_id, to_id, amount):
@@ -42,9 +49,9 @@ def execute(conn, user_id, key, kind, from_id, to_id, amount):
     own = from_id if kind != "deposit" else to_id
     row = conn.execute("SELECT owner_id FROM accounts WHERE id=%s", (own,)).fetchone()
     if row is None or row["owner_id"] != user_id:
-        raise HTTPException(404, "Account not found")          # same answer: missing or not yours
+        _deny(user_id, kind, key, from_id, to_id, amount)          # same answer: missing or not yours
     if conn.execute("SELECT 1 FROM accounts WHERE id=%s", (dst,)).fetchone() is None:
-        raise HTTPException(404, "Account not found")
+        _deny(user_id, kind, key, from_id, to_id, amount)
 
     # 3. Lock both rows in ascending id order (prevents deadlock), THEN read balances.
     rows = conn.execute(
