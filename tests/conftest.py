@@ -9,7 +9,12 @@ if not TEST_URL:
     pytest.exit("Set TEST_DATABASE_URL (a DB separate from the deployed one)", 2)
 if TEST_URL == os.environ.get("DATABASE_URL"):
     pytest.exit("TEST_DATABASE_URL must differ from DATABASE_URL", 2)
-os.environ["DATABASE_URL"] = TEST_URL
+
+APP_URL = os.environ.get("TEST_APP_DATABASE_URL")
+if not APP_URL:
+    pytest.exit("Set TEST_APP_DATABASE_URL (the restricted ledgerline_app login)", 2)
+
+os.environ["DATABASE_URL"] = APP_URL
 os.environ.setdefault("JWT_SECRET", "test-secret-test-secret-test-secret")
 
 from fastapi import HTTPException
@@ -18,6 +23,11 @@ from app import ledger
 
 def connect():
     return psycopg.connect(TEST_URL, row_factory=dict_row)
+
+
+def balance(acct_id):
+    with connect() as c:
+        return c.execute("SELECT balance_paise b FROM accounts WHERE id=%s", (acct_id,)).fetchone()["b"]
 
 
 def new_user(role="holder"):
@@ -38,7 +48,7 @@ def new_account(owner_id, balance=0):
 def run_op(user_id, key, kind, from_id, to_id, amount):
     """Same shape as production: own connection, commit on success, rollback on exception."""
     try:
-        with connect() as c:
+        with psycopg.connect(APP_URL, row_factory=dict_row) as c:
             return ledger.execute(c, user_id, key, kind, from_id, to_id, amount)
     except HTTPException as e:
         return e.status_code, None
