@@ -101,17 +101,23 @@ def main():
         # 1. CONCURRENCY OVERDRAFT RACE ATTACK
         # =====================================================================
         log_test("1. Concurrency Overdraft Race Attack (20 threads x 3,000 paise vs 10,000 paise)")
+        # Create a fresh isolated account specifically for the race test
+        r_race_acct = client.post(f"{base_url}/accounts", json={"name": f"Race Acct {uuid.uuid4().hex[:6]}"}, headers=holder_hdr)
+        if r_race_acct.status_code != 201:
+            fail_test("Create Race Account", f"Failed with {r_race_acct.status_code}: {r_race_acct.text}")
+        race_acct_id = r_race_acct.json()["id"]
+
         # Deposit exactly 10,000 paise (₹100)
         dep_key = str(uuid.uuid4())
         r_dep = client.post(
             f"{base_url}/deposits",
-            json={"account_id": acct_id, "amount_paise": 10_000},
+            json={"account_id": race_acct_id, "amount_paise": 10_000},
             headers={**holder_hdr, "Idempotency-Key": dep_key}
         )
         if r_dep.status_code != 201:
             fail_test("Initial Deposit", f"Failed with {r_dep.status_code}: {r_dep.text}")
         starting_bal = r_dep.json()["balance_after"]
-        print(f"[*] Starting Balance for Race: {starting_bal} paise (seeded with 10,000)")
+        print(f"[*] Starting Balance for Race: {starting_bal} paise (in fresh account {race_acct_id})")
 
         # Fire 20 parallel withdrawal requests of 3,000 paise each
         def attempt_withdrawal(thread_id: int):
@@ -119,7 +125,7 @@ def main():
                 k = str(uuid.uuid4())
                 return th_client.post(
                     f"{base_url}/withdrawals",
-                    json={"account_id": acct_id, "amount_paise": 3_000},
+                    json={"account_id": race_acct_id, "amount_paise": 3_000},
                     headers={**holder_hdr, "Idempotency-Key": k}
                 )
 
@@ -133,17 +139,17 @@ def main():
         print(f"[*] Concurrency Results: {posted_count} Posted (201), {refused_count} Refused (409)")
 
         # Verify balance after race
-        r_bal = client.get(f"{base_url}/accounts/{acct_id}", headers=holder_hdr)
+        r_bal = client.get(f"{base_url}/accounts/{race_acct_id}", headers=holder_hdr)
         final_bal = r_bal.json()["balance_paise"]
         print(f"[*] Final Account Balance: {final_bal} paise")
 
         if final_bal < 0:
             fail_test("Concurrency Race", f"CRITICAL: Negative balance detected! Balance: {final_bal}")
-        if posted_count > 3:
-            fail_test("Concurrency Race", f"CRITICAL: Overdraft occurred! {posted_count} withdrawals succeeded from 10,000 paise.")
-        if posted_count + refused_count != 20:
-            fail_test("Concurrency Race", f"Unexpected status codes: {codes}")
-        pass_test("Concurrency Overdraft Defense", f"Zero negative balance tolerance maintained ({posted_count} posted, {refused_count} refused, balance={final_bal} paise)")
+        if posted_count != 3 or refused_count != 17:
+            fail_test("Concurrency Race", f"Expected exactly 3 posted and 17 refused, got {posted_count} posted, {refused_count} refused.")
+        if final_bal != 1_000:
+            fail_test("Concurrency Race", f"Expected final balance 1,000 paise, got {final_bal} paise.")
+        pass_test("Concurrency Overdraft Defense", f"Zero negative balance tolerance maintained (3 posted, 17 refused, balance={final_bal} paise)")
 
         # =====================================================================
         # 2. IDEMPOTENCY REPLAY ATTACK (DOUBLE-SPEND PREVENTION)
