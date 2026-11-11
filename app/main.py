@@ -38,6 +38,16 @@ def health():
         redacted = DATABASE_URL.split("@")[-1] if "@" in DATABASE_URL else DATABASE_URL[:15]
         return {"status": "degraded", "db_error": str(e), "target": redacted}
 
+@app.get("/ready")
+def ready():
+    try:
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM accounts LIMIT 1")
+                return {"status": "ready", "db": "ready"}
+    except Exception as e:
+        return {"status": "not_ready", "error": str(e)}
+
 @app.get("/me")
 def me(user=Depends(current_user)):
     return user

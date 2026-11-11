@@ -10,6 +10,11 @@ def test_health():
     assert res.status_code == 200
     assert res.json()["status"] == "ok"
 
+def test_ready():
+    res = client.get("/ready")
+    assert res.status_code == 200
+    assert res.json()["status"] == "ready"
+
 def test_register_and_login():
     unique_email = f"user_{uuid.uuid4().hex[:8]}@example.com"
     pw = "SecretPass123!"
